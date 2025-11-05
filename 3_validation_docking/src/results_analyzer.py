@@ -83,7 +83,10 @@ class ResultsAnalyzer:
         mols = [Chem.MolFromSmiles(smi) for smi in top_df['SMILES']]
         legends = [f"Aff: {aff:.2f} kcal/mol\nModel: {model}" 
                    for aff, model in zip(top_df['Docking_Affinity'], top_df['Model'])]
-        img = Draw.MolsToGridImage(mols, molsPerRow=5, subImgSize=(250, 250), legends=legends)
-        img.save(os.path.join(self.config["ANALYSIS_RESULTS_DIR"], "2_top10_molecules.png"))
+        try:
+            img = Draw.MolsToGridImage(mols, molsPerRow=5, subImgSize=(250, 250), legends=legends)
+            img.save(os.path.join(self.config["ANALYSIS_RESULTS_DIR"], "2_top10_molecules.png"))
+        except Exception as e:
+            logging.warning(f"Could not generate molecule images: {e}")
         
         logging.info(f"Аналитические графики сохранены в: {self.config['ANALYSIS_RESULTS_DIR']}")

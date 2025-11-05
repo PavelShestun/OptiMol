@@ -4,8 +4,7 @@ import logging
 import sys
 import os
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Crippen, FilterCatalog, FilterCatalogParams
-from rdkit.Chem.RDConfig import RDContribDir
+from rdkit.Chem import Descriptors, Crippen
 from tqdm.auto import tqdm
 from .config import MORGAN_GENERATOR
 from rdkit.Chem import AllChem
@@ -39,26 +38,19 @@ def calculate_sigma_profile_approximation(mol):
         logger.warning(f"Could not calculate sigma profile approximation: {e}")
         return np.zeros(20)
 
+from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
+
 # --- Фильтры и оценки ---
 # Фильтр PAINS
 params = FilterCatalogParams()
 params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS)
 PAINS_CATALOG = FilterCatalog(params)
 
+from rdkit.Contrib.SA_Score import sascorer
+
 def calculate_sa_score(mol):
     """Расчет SA Score."""
-    try:
-        # Полноценный расчет, если доступен sascorer
-        sys.path.append(os.path.join(RDContribDir, 'SA_Score'))
-        import sascorer
-        return sascorer.calculateScore(mol)
-    except ImportError:
-        # Упрощенная аппроксимация, если sascorer не найден
-        logp = Descriptors.MolLogP(mol)
-        mw = Descriptors.MolWt(mol)
-        rot_bonds = Descriptors.NumRotatableBonds(mol)
-        score = 2.5 + 0.1 * (mw / 100) + 0.2 * rot_bonds + 0.3 * abs(logp - 2.5)
-        return min(score, 10.0)
+    return sascorer.calculateScore(mol)
 
 def has_pains(mol):
     return PAINS_CATALOG.HasMatch(mol)
