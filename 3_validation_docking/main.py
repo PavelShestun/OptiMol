@@ -5,6 +5,7 @@ import logging
 
 # Добавляем корневую директорию проекта в путь
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 import config
 
 from src.data_preparer import DataPreparer

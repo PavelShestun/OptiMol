@@ -22,18 +22,18 @@ def train_and_select_best_model(df: pd.DataFrame, model_filename: str):
         return None
 
     logger.info(f"--- Конкурс моделей для [{model_filename}] ---")
-    
+
     # Подготовка признаков и целевой переменной
     mols = [Chem.MolFromSmiles(smi) for smi in df['canonical_smiles']]
     valid_indices = [i for i, m in enumerate(mols) if m is not None]
-    
+
     mols_valid = [mols[i] for i in valid_indices]
     df_valid = df.iloc[valid_indices]
-    
+
     if len(df_valid) < 50:
         logger.warning(f"После валидации SMILES осталось мало данных ({len(df_valid)}), обучение для {model_filename} пропущено.")
         return None
-        
+
     y = df_valid['pIC50'].values
     try:
         X = np.vstack([get_features(m) for m in mols_valid])

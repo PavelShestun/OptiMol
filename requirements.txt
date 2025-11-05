@@ -11,4 +11,3 @@ chembl_webresource_client
 tqdm
 joblib
 ipython
-google-colab
