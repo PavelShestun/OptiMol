@@ -73,19 +73,74 @@ class DockingRunner:
                    line[22:26].strip() == self.config["REF_LIGAND_RES_NUM"]:
                     coords.append([float(line[30:38]), float(line[38:46]), float(line[46:54])])
 
-        if not coords:
-            raise ValueError("Референсный лиганд для определения докинг-бокса не найден в PDB файле.")
+        try:
+            logging.info("Attempting to predict docking box with P2Rank...")
+            prepared_receptor_path = os.path.join(self.config["RECEPTOR_DIR"], f"{self.config['PDB_ID']}_receptor.pdb")
+            box_params = self._get_p2rank_prediction(prepared_receptor_path)
+            logging.info(f"P2Rank predicted docking box: { {k: f'{v:.3f}' for k, v in box_params.items()} }")
+            return box_params
+        except Exception as e:
+            logging.warning(f"P2Rank prediction failed: {e}. Falling back to reference ligand method.")
+            if not coords:
+                raise ValueError("Референсный лиганд для определения докинг-бокса не найден в PDB файле.")
 
-        coords = pd.DataFrame(coords, columns=['x', 'y', 'z'])
-        center = coords.mean()
-        size = (coords.max() - coords.min()) + self.config["BOX_PADDING"]
+            coords = pd.DataFrame(coords, columns=['x', 'y', 'z'])
+            center = coords.mean()
+            size = (coords.max() - coords.min()) + self.config["BOX_PADDING"]
 
-        box_params = {
+            box_params = {
+                'center_x': center['x'], 'center_y': center['y'], 'center_z': center['z'],
+                'size_x': size['x'], 'size_y': size['y'], 'size_z': size['z']
+            }
+            logging.info(f"Координаты докинг-бокса рассчитаны: { {k: f'{v:.3f}' for k, v in box_params.items()} }")
+            return box_params
+
+    def _get_p2rank_prediction(self, pdb_file_path):
+        """Submits a PDB file to PrankWeb and retrieves the top pocket."""
+        import time
+
+        # Create configuration file
+        config_path = "p2rank_config.json"
+        with open(config_path, "w") as f:
+            f.write('{"chains":[], "structure-sealed": true, "prediction-model": "default"}')
+
+        # Submit to PrankWeb
+        with open(pdb_file_path, 'rb') as pdb_file:
+            files = {
+                'structure': (os.path.basename(pdb_file_path), pdb_file, 'chemical/x-pdb'),
+                'configuration': (config_path, open(config_path, 'rb'), 'application/json')
+            }
+            response = requests.post("https://prankweb.cz/api/v2/prediction/v4-user-upload", files=files)
+            response.raise_for_status()
+
+        prediction_data = response.json()
+        task_id = prediction_data.get("id")
+
+        # Poll for results
+        status_url = f"https://prankweb.cz/api/v2/prediction/v4-user-upload/{task_id}"
+        while True:
+            status_response = requests.get(status_url)
+            status_data = status_response.json()
+            if status_data.get("status") == "successful":
+                break
+            time.sleep(10)
+
+        # Download and parse results
+        pockets_url = f"https://prankweb.cz/api/v2/prediction/v4-user-upload/{task_id}/pockets"
+        pockets_response = requests.get(pockets_url)
+        pockets_data = pockets_response.json()
+
+        if not pockets_data:
+            raise ValueError("P2Rank did not return any pockets.")
+
+        top_pocket = pockets_data[0]
+        center = top_pocket['center']
+        size = top_pocket.get('size', {'x': 20, 'y': 20, 'z': 20}) # Default size if not provided
+
+        return {
             'center_x': center['x'], 'center_y': center['y'], 'center_z': center['z'],
             'size_x': size['x'], 'size_y': size['y'], 'size_z': size['z']
         }
-        logging.info(f"Координаты докинг-бокса рассчитаны: { {k: f'{v:.3f}' for k, v in box_params.items()} }")
-        return box_params
 
     def run_docking_batch(self, box_params: dict):
         """Запускает докинг для всех подготовленных лигандов."""

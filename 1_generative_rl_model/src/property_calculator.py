@@ -8,8 +8,36 @@ from rdkit.Chem import Descriptors, Crippen, FilterCatalog, FilterCatalogParams
 from rdkit.Chem.RDConfig import RDContribDir
 from tqdm.auto import tqdm
 from .config import MORGAN_GENERATOR
+from rdkit.Chem import AllChem
+from rdkit.Chem import rdFreeSASA
+from rdkit.Chem import rdPartialCharges
 
 logger = logging.getLogger(__name__)
+
+def calculate_sigma_profile_approximation(mol):
+    """
+    Approximates the sigma profile of a molecule.
+    """
+    try:
+        mol_with_hs = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol_with_hs, AllChem.ETKDG())
+        AllChem.UFFOptimizeMolecule(mol_with_hs)
+        rdPartialCharges.ComputeGasteigerCharges(mol_with_hs)
+
+        radii = rdFreeSASA.classifyAtoms(mol_with_hs)
+        sasa = rdFreeSASA.CalcSASA(mol_with_hs, radii)
+
+        charges = [float(atom.GetProp('_GasteigerCharge')) for atom in mol_with_hs.GetAtoms()]
+        sasa_per_atom = [float(atom.GetProp('SASA')) for atom in mol_with_hs.GetAtoms()]
+
+        # Create a histogram of SASA binned by partial charge
+        bins = np.linspace(-1, 1, 21)  # 20 bins from -1 to 1
+        hist, _ = np.histogram(charges, bins=bins, weights=sasa_per_atom)
+        return hist / np.sum(hist) if np.sum(hist) > 0 else hist
+
+    except Exception as e:
+        logger.warning(f"Could not calculate sigma profile approximation: {e}")
+        return np.zeros(20)
 
 # --- Фильтры и оценки ---
 # Фильтр PAINS
@@ -113,6 +141,8 @@ def calculate_advanced_properties(smiles, keap1_m, egfr_m, ikkb_m):
         'MolWt': Descriptors.MolWt(mol)
     }
     
+    result['Sigma_Profile_Approximation'] = calculate_sigma_profile_approximation(mol)
+
     # Расчет BBB Score
     logp = Crippen.MolLogP(mol)
     tpsa = Descriptors.TPSA(mol)
@@ -156,8 +186,17 @@ def calculate_multi_objective_reward(props):
     """Расчет многоцелевой функции вознаграждения."""
     if not props: return 0.01
 
-    weights = { 'r_pic50': 0.35, 'r_sel': 0.20, 'r_qed': 0.15, 'r_cns': 0.10, 'r_bbb': 0.10, 'r_sa': 0.10 }
+    target_sigma_profile = np.array([0.1, 0.05, 0, 0, 0, 0, 0, 0, 0, 0.1, 0.1, 0, 0, 0, 0, 0, 0, 0, 0.05, 0.1])
+
+    weights = { 'r_pic50': 0.30, 'r_sel': 0.15, 'r_qed': 0.15, 'r_cns': 0.10, 'r_bbb': 0.10, 'r_sa': 0.10, 'r_sigma': 0.10 }
     
+    # Cosine similarity for sigma profile
+    approx_profile = props.get('Sigma_Profile_Approximation', np.zeros(20))
+    if np.linalg.norm(approx_profile) > 0 and np.linalg.norm(target_sigma_profile) > 0:
+        r_sigma = np.dot(approx_profile, target_sigma_profile) / (np.linalg.norm(approx_profile) * np.linalg.norm(target_sigma_profile))
+    else:
+        r_sigma = 0.0
+
     r_pic50 = _sigmoid(props.get('pIC50_KEAP1', 0.0), k=2.0, x0=7.5)
     r_sel = _sigmoid(props.get('Selectivity_Score', 0.0), k=1.5, x0=2.5)
     r_qed = _sigmoid(props.get('QED', 0.0), k=10, x0=0.6)
@@ -179,7 +218,8 @@ def calculate_multi_objective_reward(props):
     score = (
         weights['r_pic50'] * r_pic50 + weights['r_sel'] * r_sel +
         weights['r_qed'] * r_qed + weights['r_cns'] * r_cns +
-        weights['r_bbb'] * r_bbb + weights['r_sa'] * r_sa
+        weights['r_bbb'] * r_bbb + weights['r_sa'] * r_sa +
+        weights['r_sigma'] * r_sigma
     ) / total_weight
     
     return np.clip(score, 0, 1)

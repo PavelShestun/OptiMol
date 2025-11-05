@@ -12,8 +12,52 @@ import xgboost as xgb
 from sklearn.linear_model import LinearRegression
 from .config import MORGAN_GENERATOR, KEAP1_MODEL_PATH, EGFR_MODEL_PATH, IKKB_MODEL_PATH
 from .property_calculator import get_features
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from torchkan import KAN
 
 logger = logging.getLogger(__name__)
+
+class KANRegressor(nn.Module):
+    def __init__(self, input_dim):
+        super(KANRegressor, self).__init__()
+        self.kan = KAN(layers_hidden=[input_dim, 64, 1], grid_size=5, spline_order=3)
+
+    def forward(self, x):
+        return self.kan(x)
+
+    def predict(self, X):
+        device = next(self.parameters()).device
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(device)
+        self.eval()
+        with torch.no_grad():
+            return self.kan(X_tensor).cpu().numpy()
+
+def train_kan_regressor(X, y):
+    """Trains a KAN regressor model."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    input_dim = X.shape[1]
+    model = KANRegressor(input_dim).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.MSELoss()
+
+    X_tensor = torch.tensor(X, dtype=torch.float32).to(device)
+    y_tensor = torch.tensor(y, dtype=torch.float32).view(-1, 1).to(device)
+
+    dataset = TensorDataset(X_tensor, y_tensor)
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    model.train()
+    for epoch in range(50):
+        for X_batch, y_batch in loader:
+            optimizer.zero_grad()
+            outputs = model(X_batch)
+            loss = criterion(outputs, y_batch)
+            loss.backward()
+            optimizer.step()
+    return model
 
 def train_and_select_best_model(df: pd.DataFrame, model_filename: str):
     """Обучает несколько моделей, выбирает лучшую и сохраняет ее."""
@@ -21,71 +65,44 @@ def train_and_select_best_model(df: pd.DataFrame, model_filename: str):
         logger.warning(f"Недостаточно данных для обучения модели {model_filename} ({len(df) if df is not None else 0} строк).")
         return None
 
-    logger.info(f"--- Конкурс моделей для [{model_filename}] ---")
-    
-    # Подготовка признаков и целевой переменной
+    logger.info(f"--- Training KAN model for [{model_filename}] ---")
+
     mols = [Chem.MolFromSmiles(smi) for smi in df['canonical_smiles']]
     valid_indices = [i for i, m in enumerate(mols) if m is not None]
-    
+
     mols_valid = [mols[i] for i in valid_indices]
     df_valid = df.iloc[valid_indices]
-    
+
     if len(df_valid) < 50:
-        logger.warning(f"После валидации SMILES осталось мало данных ({len(df_valid)}), обучение для {model_filename} пропущено.")
+        logger.warning(f"After SMILES validation, not enough data remains ({len(df_valid)}), training for {model_filename} skipped.")
         return None
-        
+
     y = df_valid['pIC50'].values
     try:
         X = np.vstack([get_features(m) for m in mols_valid])
     except Exception as e:
-        logger.error(f"Ошибка генерации признаков для {model_filename}: {e}")
+        logger.error(f"Error generating features for {model_filename}: {e}")
         return None
 
-    # Удаление строк с NaN/inf в признаках
     mask = np.all(np.isfinite(X), axis=1)
     X, y = X[mask], y[mask]
     if len(X) < 50:
-        logger.warning(f"После очистки признаков осталось мало данных ({len(X)}), обучение для {model_filename} пропущено.")
+        logger.warning(f"After cleaning features, not enough data remains ({len(X)}), training for {model_filename} skipped.")
         return None
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Определение моделей
-    estimators = [
-        ('rf', RandomForestRegressor(random_state=42, n_jobs=-1)),
-        ('xgb', xgb.XGBRegressor(random_state=42, n_jobs=-1, verbosity=0)),
-        ('lgbm', lgb.LGBMRegressor(random_state=42, n_jobs=-1, verbosity=-1))
-    ]
-    stacking_model = StackingRegressor(estimators=estimators, final_estimator=LinearRegression(), cv=3, n_jobs=-1)
+    try:
+        logger.info(f"  [*] Training KAN...")
+        model = train_kan_regressor(X_train, y_train)
+        score = r2_score(y_test, model.predict(X_test))
+        logger.info(f"    -> R2-score on test set: {score:.3f}")
 
-    models = {
-        'LightGBM': estimators[2][1],
-        'RandomForest': estimators[0][1],
-        'XGBoost': estimators[1][1],
-        'StackingEnsemble': stacking_model
-    }
-
-    best_model, best_score, best_name = None, -np.inf, ""
-
-    for name, model in models.items():
-        try:
-            logger.info(f"  [*] Обучение {name}...")
-            model.fit(X_train, y_train)
-            score = r2_score(y_test, model.predict(X_test))
-            logger.info(f"    -> R2-score на тесте: {score:.3f}")
-            if score > best_score:
-                best_score, best_model, best_name = score, model, name
-        except Exception as e:
-            logger.error(f"    -> Ошибка обучения {name}: {e}")
-            continue
-
-    if best_model:
-        logger.info(f"\n  [+] Победитель для [{model_filename}]: {best_name} с R2-score {best_score:.3f}")
-        joblib.dump(best_model, model_filename)
-        logger.info(f"  [+] Лучшая модель сохранена в: {model_filename}")
-        return best_model
-    else:
-        logger.error(f"[!] Ни одна модель не была успешно обучена для {model_filename}.")
+        joblib.dump(model, model_filename)
+        logger.info(f"  [+] KAN model saved to: {model_filename}")
+        return model
+    except Exception as e:
+        logger.error(f"    -> Error training KAN: {e}")
         return None
 
 def prepare_models(keap1_clean, egfr_clean, ikkb_clean):
