@@ -1,4 +1,4 @@
-# Comprehensive Pipeline for De Novo Design of KEAP1 Inhibitors
+# De Novo Design of KEAP1 Inhibitors
 
 <img width="871" height="484" alt="Frame 1 (1)" src="https://github.com/user-attachments/assets/ce42b775-15b1-4f73-a64f-b40afd8716ca" />
 
