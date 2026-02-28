@@ -1,0 +1,29 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.conda/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Data & Models (Too large for git)
+data/
+models/checkpoints/
+results/
+wandb/
+
+# OS specific
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+cuda_12.4.0_550.54.14_linux.run
+optimol.egg-info/
+__pycache__/
+cuda_12.4.0_550.54.14_linux.run

@@ -1,0 +1,25 @@
+name: optimol
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.10
+  - rdkit>=2023.03.1
+  - pytorch
+  - pytorch-cuda=12.1  # Замени на свою версию CUDA или удали, если только CPU
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - pyyaml
+  - tqdm
+  - pip
+  - pip:
+    - selfies
+    - wandb  # Для мониторинга обучения и графиков для публикации
+    - chembl_webresource_client
+    - xgboost
+    - lightgbm
+    - loguru  # Красивые логи вместо print
+    - deepchem
